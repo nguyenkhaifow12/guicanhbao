@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Biểu đồ RSI và Giá BTC theo giờ</title>
+  <style>
+    body { 
+      font-family: Arial; 
+      max-width: 900px; 
+      margin: auto; 
+      background: #f0f2f5; 
+      padding: 20px; 
+    }
+    #chart-container {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px #ccc;
+      margin-top: 20px;
+      height: 500px;
+    }
+    .legend {
+      display: flex;
+      justify-content: center;
+      margin-top: 10px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin: 0 10px;
+    }
+    .legend-color {
+      width: 15px;
+      height: 15px;
+      margin-right: 5px;
+      border-radius: 50%;
+    }
+    .btc-price {
+      background-color: #009900;
+    }
+    .rsi-6 {
+      background-color: #7700ff;
+    }
+    .rsi-24 {
+      background-color: #ff7700;
+    }
+    .rsi-70 {
+      background-color: #ff4545;
+    }
+    .rsi-30 {
+      background-color: #45ff45;
+    }
+    .alert-settings {
+      background: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px #ccc;
+      margin: 20px 0;
+    }
+    .alert-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    input, select {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+    }
+    .hidden {
+      display: none;
+    }
+    .status-alert {
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+      font-weight: bold;
+    }
+    .success {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .error {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    .warning {
+      background-color: #fff3cd;
+      color: #856404;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+</head>
+<body>
+  <h2>Biểu đồ RSI 6/24 và Giá BTC (24 giờ gần nhất)</h2>
+  <div id="status-message" class="status-alert">Đang tải dữ liệu...</div>
+
+  <!-- Cài đặt cảnh báo -->
+  <div class="alert-settings">
+    <h3>Cài đặt Cảnh báo RSI</h3>
+    
+    <div class="alert-form">
+      <div>
+        <label for="alert-email">Email nhận cảnh báo:</label>
+        <input type="email" id="alert-email" placeholder="your@email.com" value="lethequyen13@gmail.com">
+      </div>
+      
+      <div>
+        <label for="alert-threshold">Ngưỡng cảnh báo RSI:</label>
+        <input type="number" id="alert-threshold" min="0" max="100" value="45">
+      </div>
+      
+      <div>
+        <label for="alert-period">Sử dụng RSI:</label>
+        <select id="alert-period">
+          <option value="6">RSI (6)</option>
+          <option value="24" selected>RSI (24)</option>
+        </select>
+      </div>
+      
+      <div>
+        <label for="alert-condition">Điều kiện cảnh báo:</label>
+        <select id="alert-condition">
+          <option value="below" selected>Thấp hơn ngưỡng (quá bán)</option>
+          <option value="above">Cao hơn ngưỡng (quá mua)</option>
+        </select>
+      </div>
+      
+      <button onclick="saveAlertSettings()">Lưu Cài Đặt</button>
+    </div>
+    
+    <!-- Form ẩn dùng để gửi email thông qua FormSubmit -->
+    <form id="alert-form" method="POST" class="hidden">
+      <input type="hidden" name="_subject" id="form-subject" value="Cảnh báo RSI BTC">
+      <input type="hidden" name="_template" value="table">
+      <input type="hidden" name="message" id="form-message" value="">
+      <input type="hidden" name="_captcha" value="false">
+    </form>
+  </div>
+
+  <div id="chart-container">
+    <canvas id="btcChart"></canvas>
+  </div>
+  
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-color btc-price"></div>
+      <span>Giá BTC</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color rsi-6"></div>
+      <span>RSI (6)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color rsi-24"></div>
+      <span>RSI (24)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color rsi-70"></div>
+      <span>RSI = 70 (quá mua)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color rsi-30"></div>
+      <span>RSI = 30 (quá bán)</span>
+    </div>
+  </div>
+
+  <script>
+    // Biến lưu trữ giá trị RSI và giá hiện tại
+    let currentRSI6 = null;
+    let currentRSI24 = null;
+    let currentPrice = null;
+    let chart = null;
+    
+    // Email mặc định
+    const defaultEmail = 'lethequyen13@gmail.com';
+    
+    // Khôi phục cài đặt cảnh báo từ localStorage
+    function loadAlertSettings() {
+      const email = localStorage.getItem('alertEmail') || defaultEmail;
+      const threshold = localStorage.getItem('alertThreshold') || '45';
+      const period = localStorage.getItem('alertPeriod') || '24';
+      const condition = localStorage.getItem('alertCondition') || 'below';
+      
+      document.getElementById('alert-email').value = email;
+      document.getElementById('alert-threshold').value = threshold;
+      document.getElementById('alert-period').value = period;
+      document.getElementById('alert-condition').value = condition;
+      
+      // Cập nhật action URL của form
+      if (email) {
+        document.getElementById('alert-form').action = `https://formsubmit.co/${email}`;
+      }
+    }
+    
+    // Lưu cài đặt cảnh báo
+    function saveAlertSettings() {
+      const email = document.getElementById('alert-email').value.trim();
+      const threshold = document.getElementById('alert-threshold').value;
+      const period = document.getElementById('alert-period').value;
+      const condition = document.getElementById('alert-condition').value;
+      
+      if (!email) {
+        showStatus('Vui lòng nhập địa chỉ email hợp lệ!', 'error');
+        return;
+      }
+      
+      localStorage.setItem('alertEmail', email);
+      localStorage.setItem('alertThreshold', threshold);
+      localStorage.setItem('alertPeriod', period);
+      localStorage.setItem('alertCondition', condition);
+      
+      // Cập nhật action URL của form
+      document.getElementById('alert-form').action = `https://formsubmit.co/${email}`;
+      
+      showStatus('Đã lưu cài đặt cảnh báo!', 'success');
+      
+      // Kiểm tra điều kiện cảnh báo ngay lập tức
+      checkAlertCondition();
+    }
+    
+    // Hiển thị thông báo trạng thái với màu sắc
+    function showStatus(message, type = 'success') {
+      const statusEl = document.getElementById('status-message');
+      statusEl.textContent = message;
+      statusEl.className = 'status-alert ' + type;
+      
+      // Tự động ẩn thông báo success sau 5 giây
+      if (type === 'success') {
+        setTimeout(() => {
+          statusEl.textContent = `Dữ liệu cập nhật lúc: ${new Date().toLocaleTimeString()}`;
+          statusEl.className = 'status-alert';
+        }, 5000);
+      }
+    }
+
+    // Hàm tính RSI - theo phương pháp tính của Binance
+    function calculateRSI(closes, period) {
+      const changes = [];
+      // Tính toán các thay đổi giá
+      for (let i = 1; i < closes.length; i++) {
+        changes.push(closes[i] - closes[i-1]);
+      }
+      
+      if (changes.length < period) {
+        return [];
+      }
+
+      const rsiValues = [];
+      // Pad đầu mảng để đảm bảo độ dài chính xác
+      for (let i = 0; i < period - 1; i++) {
+        rsiValues.push(null);
+      }
+      
+      // Tính RSI đầu tiên
+      let ups = 0;
+      let downs = 0;
+      
+      for (let i = 0; i < period; i++) {
+        const change = changes[i];
+        if (change > 0) ups += change;
+        else downs -= change;
+      }
+      
+      // Đảm bảo không chia cho 0
+      downs = downs || 0.00001;
+      
+      let avgUp = ups / period;
+      let avgDown = downs / period;
+      let rs = avgUp / avgDown;
+      let rsi = 100 - (100 / (1 + rs));
+      rsiValues.push(rsi);
+      
+      // Tính các RSI tiếp theo
+      for (let i = period; i < changes.length; i++) {
+        const change = changes[i];
+        let currUp = 0;
+        let currDown = 0;
+        
+        if (change > 0) currUp = change;
+        else currDown = -change;
+        
+        // Cập nhật giá trị trung bình theo phương pháp exponential (Giống Binance)
+        avgUp = ((avgUp * (period - 1)) + currUp) / period;
+        avgDown = ((avgDown * (period - 1)) + currDown) / period;
+        
+        // Đảm bảo không chia cho 0
+        if (avgDown === 0) avgDown = 0.00001;
+        
+        rs = avgUp / avgDown;
+        rsi = 100 - (100 / (1 + rs));
+        rsiValues.push(rsi);
+      }
+      
+      return rsiValues;
+    }
+
+    // Hàm kiểm tra điều kiện cảnh báo
+    function checkAlertCondition() {
+      if (!currentRSI6 || !currentRSI24 || !currentPrice) {
+        return; // Chưa có dữ liệu
+      }
+      
+      const email = localStorage.getItem('alertEmail') || defaultEmail;
+      const threshold = parseFloat(localStorage.getItem('alertThreshold') || '45');
+      const period = localStorage.getItem('alertPeriod') || '24';
+      const condition = localStorage.getItem('alertCondition') || 'below';
+      
+      if (!email) {
+        return; // Chưa cài đặt email
+      }
+      
+      // Chọn RSI dựa vào period
+      const rsiValue = period === '6' ? currentRSI6 : currentRSI24;
+      
+      // Kiểm tra điều kiện cảnh báo
+      let shouldAlert = false;
+      if (condition === 'below' && rsiValue < threshold) {
+        shouldAlert = true;
+      } else if (condition === 'above' && rsiValue > threshold) {
+        shouldAlert = true;
+      }
+      
+      // Kiểm tra thời gian gửi email cuối cùng để tránh spam
+      const lastAlertTime = localStorage.getItem('lastAlertSent') || 0;
+      const hoursPassed = (Date.now() - parseInt(lastAlertTime)) / 3600000;
+      
+      if (shouldAlert && hoursPassed >= 1) { // Chỉ gửi email tối đa 1 lần/giờ
+        sendEmailAlert(rsiValue, currentPrice, threshold, period, condition);
+      }
+      
+      // Hiển thị trạng thái cảnh báo trên trang
+      updateAlertStatus(rsiValue, threshold, period, condition);
+    }
+    
+    // Hiển thị trạng thái cảnh báo
+    function updateAlertStatus(rsiValue, threshold, period, condition) {
+      const statusEl = document.getElementById('status-message');
+      statusEl.textContent = `Dữ liệu cập nhật lúc: ${new Date().toLocaleTimeString()}`;
+      statusEl.className = 'status-alert';
+      
+      const conditionText = condition === 'below' ? 'dưới' : 'trên';
+      const rsiPeriod = period === '6' ? 'RSI(6)' : 'RSI(24)';
+      
+      if ((condition === 'below' && rsiValue < threshold) || 
+          (condition === 'above' && rsiValue > threshold)) {
+        statusEl.textContent += ` - CẢNH BÁO: ${rsiPeriod} = ${rsiValue.toFixed(2)} (${conditionText} ${threshold})`;
+        statusEl.className = 'status-alert warning';
+      }
+    }
+
+    // Hàm gửi email thông báo (sử dụng FormSubmit)
+    function sendEmailAlert(rsiValue, price, threshold, period, condition) {
+      try {
+        const rsiPeriod = period === '6' ? 'RSI(6)' : 'RSI(24)';
+        const conditionText = condition === 'below' ? 'thấp hơn' : 'cao hơn';
+        const email = localStorage.getItem('alertEmail') || defaultEmail;
+        
+        // Đảm bảo action URL của form là chính xác
+        document.getElementById('alert-form').action = `https://formsubmit.co/${email}`;
+        
+        // Cập nhật nội dung form
+        const subjectEl = document.getElementById('form-subject');
+        const messageEl = document.getElementById('form-message');
+        
+        subjectEl.value = `Cảnh báo ${rsiPeriod} BTC ${conditionText} ${threshold}`;
+        messageEl.value = `
+        ${rsiPeriod} hiện tại là ${rsiValue.toFixed(2)}, ${conditionText} ngưỡng ${threshold}.
+        Giá BTC hiện tại: $${price.toFixed(2)}
+        Thời gian: ${new Date().toLocaleString()}
+        `;
+        
+        // Thêm thông tin debug vào console
+        console.log('Gửi email cảnh báo đến:', email);
+        console.log('Subject:', subjectEl.value);
+        console.log('Message:', messageEl.value);
+        
+        // Submit form để gửi email
+        document.getElementById('alert-form').submit();
+        
+        // Lưu thời gian gửi email cuối cùng
+        localStorage.setItem('lastAlertSent', Date.now());
+        showStatus('Đã gửi cảnh báo tới: ' + email, 'success');
+        
+      } catch (err) {
+        console.error('Lỗi gửi email:', err);
+        showStatus('Lỗi khi gửi email cảnh báo: ' + err.message, 'error');
+      }
+    }
+
+    async function fetchAndDisplayData() {
+      try {
+        // Lấy dữ liệu giá BTC từ Binance theo giờ (lấy thêm để tính RSI chính xác)
+        const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100');
+        const data = await response.json();
+        
+        // Xử lý dữ liệu
+        const candles = data.map(candle => ({
+          close: parseFloat(candle[4]),
+          time: new Date(candle[0]),
+          timestamp: candle[0]
+        }));
+        
+        // Sắp xếp theo thời gian tăng dần
+        candles.sort((a, b) => a.timestamp - b.timestamp);
+        
+        const closes = candles.map(c => c.close);
+        
+        // Tính RSI 6 và RSI 24
+        const rsi6Values = calculateRSI(closes, 6);
+        const rsi24Values = calculateRSI(closes, 24);
+        
+        // Lưu giá trị hiện tại
+        currentRSI6 = rsi6Values[rsi6Values.length-1];
+        currentRSI24 = rsi24Values[rsi24Values.length-1];
+        currentPrice = closes[closes.length-1];
+        
+        // Thêm thông tin debug vào console
+        console.log('RSI 6 hiện tại:', currentRSI6);
+        console.log('RSI 24 hiện tại:', currentRSI24);
+        console.log('Giá BTC hiện tại:', currentPrice);
+        
+        // Lấy 24 giờ gần nhất
+        const recentHours = 24;
+        const labels = candles.slice(-recentHours).map(c => {
+          const date = new Date(c.time);
+          return date.getHours() + ':00';
+        });
+        
+        const recentPrices = closes.slice(-recentHours);
+        const recentRSI6 = rsi6Values.slice(-recentHours);
+        const recentRSI24 = rsi24Values.slice(-recentHours);
+        
+        // Kiểm tra điều kiện cảnh báo
+        checkAlertCondition();
+        
+        // Tạo hoặc cập nhật biểu đồ
+        if (chart) {
+          // Cập nhật biểu đồ đã tồn tại
+          chart.data.labels = labels;
+          chart.data.datasets[0].data = recentPrices;
+          chart.data.datasets[1].data = recentRSI6;
+          chart.data.datasets[2].data = recentRSI24;
+          chart.update();
+        } else {
+          // Tạo biểu đồ mới
+          const ctx = document.getElementById('btcChart').getContext('2d');
+          chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [
+                {
+                  label: 'Giá BTC (USD)',
+                  data: recentPrices,
+                  borderColor: '#009900',
+                  backgroundColor: 'rgba(0, 153, 0, 0.1)',
+                  yAxisID: 'y',
+                  tension: 0.4,
+                  borderWidth: 2
+                },
+                {
+                  label: 'RSI (6)',
+                  data: recentRSI6,
+                  borderColor: '#7700ff',
+                  backgroundColor: 'rgba(119, 0, 255, 0.1)',
+                  yAxisID: 'y1',
+                  tension: 0.4,
+                  borderWidth: 2
+                },
+                {
+                  label: 'RSI (24)',
+                  data: recentRSI24,
+                  borderColor: '#ff7700',
+                  backgroundColor: 'rgba(255, 119, 0, 0.1)',
+                  yAxisID: 'y1',
+                  tension: 0.4,
+                  borderWidth: 2
+                },
+                {
+                  label: 'RSI = 70',
+                  data: Array(recentHours).fill(70),
+                  borderColor: '#ff4545',
+                  borderWidth: 1,
+                  borderDash: [5, 5],
+                  pointRadius: 0,
+                  fill: false,
+                  yAxisID: 'y1'
+                },
+                {
+                  label: 'RSI = 30',
+                  data: Array(recentHours).fill(30),
+                  borderColor: '#45ff45',
+                  borderWidth: 1,
+                  borderDash: [5, 5],
+                  pointRadius: 0,
+                  fill: false,
+                  yAxisID: 'y1'
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              interaction: {
+                mode: 'index',
+                intersect: false,
+              },
+              plugins: {
+                legend: {
+                  display: false
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function(context) {
+                      let label = context.dataset.label || '';
+                      if (label) {
+                        label += ': ';
+                      }
+                      if (context.datasetIndex === 0) {
+                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
+                      } else {
+                        label += context.raw !== null ? context.raw.toFixed(2) : 'N/A';
+                      }
+                      return label;
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  title: {
+                    display: true,
+                    text: 'Giờ'
+                  },
+                  ticks: {
+                    maxRotation: 45,
+                    minRotation: 45,
+                    autoSkip: true,
+                    maxTicksLimit: 24
+                  }
+                },
+                y: {
+                  type: 'linear',
+                  display: true,
+                  position: 'left',
+                  title: {
+                    display: true,
+                    text: 'Giá BTC (USD)'
+                  }
+                },
+                y1: {
+                  type: 'linear',
+                  display: true,
+                  position: 'right',
+                  min: 0,
+                  max: 100,
+                  title: {
+                    display: true,
+                    text: 'RSI'
+                  },
+                  grid: {
+                    drawOnChartArea: false,
+                  }
+                }
+              }
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Lỗi khi lấy dữ liệu:', error);
+        showStatus('Có lỗi xảy ra khi tải dữ liệu. Vui lòng thử lại sau.', 'error');
+      }
+    }
+
+    // Tự động tải cài đặt và dữ liệu khi trang được tải
+    window.addEventListener('load', () => {
+      loadAlertSettings();
+      fetchAndDisplayData();
+    });
+    
+    // Thiết lập kiểm tra định kỳ mỗi 30 phút
+    setInterval(fetchAndDisplayData, 1800000);
+  </script>
+</body>
+</html>
